@@ -1,6 +1,16 @@
 set -e
 
-device="0"
+# Use conda Python if available, otherwise use system Python
+if [ -f "/opt/anaconda3/envs/resdsql/bin/python" ]; then
+    PYTHON="/opt/anaconda3/envs/resdsql/bin/python"
+elif [ -f "$CONDA_PREFIX/bin/python" ]; then
+    PYTHON="$CONDA_PREFIX/bin/python"
+else
+    PYTHON="python"
+fi
+
+# Set device to CPU for Mac (change to "mps" for Apple Silicon GPU, or "0" for CUDA GPU)
+device="cpu"
 tables_for_natsql="./data/preprocessed_data/test_tables_for_natsql.json"
 
 if [ $1 = "base" ]
@@ -162,7 +172,7 @@ else
 fi
 
 # prepare table file for natsql
-python NatSQL/table_transform.py \
+$PYTHON NatSQL/table_transform.py \
     --in_file $table_path \
     --out_file $tables_for_natsql \
     --correct_col_type \
@@ -174,7 +184,7 @@ python NatSQL/table_transform.py \
     --db_path $db_path
 
 # preprocess test set
-python preprocessing.py \
+$PYTHON preprocessing.py \
     --mode "test" \
     --table_path $table_path \
     --input_dataset_path $input_dataset_path \
@@ -183,7 +193,7 @@ python preprocessing.py \
     --target_type "natsql"
 
 # predict probability for each schema item in the test set
-python schema_item_classifier.py \
+$PYTHON schema_item_classifier.py \
     --batch_size 32 \
     --device $device \
     --seed 42 \
@@ -194,7 +204,7 @@ python schema_item_classifier.py \
     --mode "test"
 
 # generate text2natsql test set
-python text2sql_data_generator.py \
+$PYTHON text2sql_data_generator.py \
     --input_dataset_path "./data/preprocessed_data/test_with_probs_natsql.json" \
     --output_dataset_path "./data/preprocessed_data/resdsql_test_natsql.json" \
     --topk_table_num 4 \
@@ -205,7 +215,7 @@ python text2sql_data_generator.py \
     --target_type "natsql"
 
 # inference using the best text2natsql ckpt
-python text2sql.py \
+$PYTHON text2sql.py \
     --batch_size $text2natsql_model_bs \
     --device $device \
     --seed 42 \

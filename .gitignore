@@ -1,0 +1,26 @@
+/data
+/database
+/downloads
+/models
+/tensorboard_log
+/third_party
+/predictions
+/eval_results
+*.pem
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.DS_Store
+.vscode
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
