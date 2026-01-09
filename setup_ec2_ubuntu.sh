@@ -173,6 +173,11 @@ fi
 
 print_info "Conda version: $(conda --version)"
 
+# Accept conda TOS if needed (required for newer conda versions)
+print_info "Accepting conda Terms of Service..."
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
+
 # Create conda environment
 ENV_NAME="resdsql"
 print_info "Creating conda environment '$ENV_NAME' with Python 3.8.5..."
@@ -201,6 +206,10 @@ python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f
 # Get the project directory (assuming script is run from project root)
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
+
+# Downgrade pip to <24.1 to handle spacy 2.2.3 metadata parsing issue
+print_info "Downgrading pip to <24.1 for compatibility with spacy 2.2.3..."
+pip install 'pip<24.1' --quiet
 
 # Install Python packages from requirements.txt
 print_info "Installing Python packages from requirements.txt..."
@@ -256,6 +265,9 @@ cd "$PROJECT_DIR"
 if [ -f "NatSQL/requirements.txt" ]; then
     print_info "Installing NatSQL requirements..."
     pip install -r NatSQL/requirements.txt
+    # Reinstall nltk 3.7 if NatSQL requirements downgraded it
+    print_info "Ensuring nltk 3.7 is installed (required by main requirements)..."
+    pip install nltk==3.7 --quiet
 fi
 
 # Optional: Download data, databases, and models from Google Drive
