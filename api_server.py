@@ -2,11 +2,22 @@
 FastAPI server for RESDSQL Text-to-SQL inference
 """
 import os
+import sys
 import json
 import torch
 import tempfile
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+
+# Add current directory to Python path to ensure imports work
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+# Add NatSQL directory to path for natsql2sql imports
+natsql_dir = os.path.join(current_dir, "NatSQL")
+if os.path.exists(natsql_dir) and natsql_dir not in sys.path:
+    sys.path.insert(0, natsql_dir)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,11 +40,15 @@ import text2sql_data_generator
 # For NatSQL
 try:
     from NatSQL.natsql_utils import natsql_to_sql
-    from NatSQL.table_transform import transform_tables
+    # transform_tables is not always needed, make it optional
+    try:
+        from NatSQL.table_transform import transform_tables
+    except ImportError:
+        transform_tables = None  # Not critical for inference
     NATSQL_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     NATSQL_AVAILABLE = False
-    print("Warning: NatSQL not available. Only SQL mode will work.")
+    print(f"Warning: NatSQL not available. Only SQL mode will work. Error: {e}")
 
 app = FastAPI(title="RESDSQL Text-to-SQL API", version="1.0.0")
 
@@ -426,12 +441,13 @@ def generate_input_sequence(
     
     # Use the prepare_input_and_output function
     class Opt:
-        use_contents = use_contents
-        add_fk_info = add_fk_info
-        output_skeleton = True
-        target_type = target_type
+        def __init__(self, use_contents_val, add_fk_info_val, target_type_val):
+            self.use_contents = use_contents_val
+            self.add_fk_info = add_fk_info_val
+            self.output_skeleton = True
+            self.target_type = target_type_val
     
-    opt = Opt()
+    opt = Opt(use_contents, add_fk_info, target_type)
     input_sequence, _ = prepare_input_and_output(opt, ranked_data)
     
     return input_sequence, ranked_data
@@ -442,10 +458,31 @@ def generate_sql(
     db_path: str,
     target_type: str = "natsql",
     num_beams: int = 8,
-    num_return_sequences: int = 8
+    num_return_sequences: int = 8,
+    ranked_data: Optional[Dict] = None
 ):
     """Generate SQL from input sequence"""
     global text2sql_model, text2sql_tokenizer, tables_dict, device
+    
+    # Ensure tables_dict is loaded for NatSQL mode
+    if target_type == "natsql":
+        if tables_dict is None or len(tables_dict) == 0:
+            # Try to load tables_dict if not loaded
+            if NATSQL_AVAILABLE:
+                tables_for_natsql_path = "./data/preprocessed_data/test_tables_for_natsql.json"
+                if os.path.exists(tables_for_natsql_path):
+                    with open(tables_for_natsql_path, 'r', encoding='utf-8') as f:
+                        tables_list = json.load(f)
+                    tables_dict = {t["db_id"]: t for t in tables_list}
+                else:
+                    raise ValueError("NatSQL tables file not found. Cannot use NatSQL mode.")
+            else:
+                raise ValueError("NatSQL module not available. Cannot use NatSQL mode.")
+        
+        # Check if db_id exists in tables_dict
+        if db_id not in tables_dict:
+            available = list(tables_dict.keys())[:10]
+            raise KeyError(f"Database '{db_id}' not found in NatSQL tables dictionary. Available databases (sample): {available}...")
     
     # Tokenize input
     tokenized_inputs = text2sql_tokenizer(
@@ -480,6 +517,15 @@ def generate_sql(
     # Reshape outputs
     model_outputs = model_outputs.view(1, num_return_sequences, model_outputs.shape[1])
     
+    # Extract table.column names for fix_fatal_errors_in_natsql
+    # This is needed to fix schema errors in the predicted NatSQL
+    tc_original = []
+    if ranked_data and "db_schema" in ranked_data:
+        for table in ranked_data["db_schema"]:
+            table_name = table.get("table_name_original", "")
+            for col_name in table.get("column_names_original", []):
+                tc_original.append(f"{table_name}.{col_name}")
+    
     # Decode
     if target_type == "sql":
         sqls = decode_sqls(
@@ -497,7 +543,7 @@ def generate_sql(
             [db_id],
             [input_sequence],
             text2sql_tokenizer,
-            [[]],
+            [tc_original],  # Pass the actual table.column names
             tables_dict
         )
     
@@ -582,7 +628,8 @@ async def infer_sql(request: InferenceRequest):
             db_path,
             target_type=request.target_type,
             num_beams=request.num_beams,
-            num_return_sequences=request.num_return_sequences
+            num_return_sequences=request.num_return_sequences,
+            ranked_data=ranked_data
         )
         
         return InferenceResponse(

@@ -169,6 +169,9 @@ def decode_natsqls(
                 print("Before fix:", old_pred_natsql)
                 print("After fix:", pred_natsql)
                 print("---------------")
+            # Check if db_id exists in table_dict
+            if db_id not in table_dict:
+                raise KeyError(f"Database '{db_id}' not found in NatSQL tables dictionary. Available databases: {list(table_dict.keys())[:10]}...")
             pred_sql = natsql_to_sql(pred_natsql, db_id, db_file_path, table_dict[db_id]).strip()
             
             # try to execute the predicted sql
