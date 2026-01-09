@@ -16,3 +16,6 @@ sentencepiece==0.1.99
 argparse
 scikit-learn
 func-timeout
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
