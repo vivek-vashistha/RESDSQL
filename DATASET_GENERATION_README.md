@@ -46,6 +46,37 @@ Convert to NatSQL format (requires NatSQL dataset):
 python generate_dataset_format.py --input data/spider/dev.json --output dev_natsql_output.json --target_type natsql
 ```
 
+### Generate Both SQL and NatSQL Versions
+
+Generate both SQL and NatSQL versions in separate files automatically:
+```bash
+python generate_dataset_format.py --input data/spider/dev.json --output dev_output.json --generate_both
+```
+
+This will create two files:
+- `dev_output_sql.json` - SQL version
+- `dev_output_natsql.json` - NatSQL version
+
+The script will automatically try to find the corresponding NatSQL file if not specified with `--natsql_input`.
+
+You can combine `--generate_both` with other options like `--limit` and `--start_index`:
+```bash
+# Generate first 100 entries in both formats
+python generate_dataset_format.py \
+    --input data/spider/dev.json \
+    --output dev_output.json \
+    --generate_both \
+    --limit 100
+
+# Generate entries starting from index 1000, limit 500
+python generate_dataset_format.py \
+    --input data/spider/dev.json \
+    --output dev_output.json \
+    --generate_both \
+    --start_index 1000 \
+    --limit 500
+```
+
 ### With Custom Options
 
 Limit the number of entries:
@@ -67,6 +98,10 @@ python generate_dataset_format.py --input data/spider/dev.json --output dev_outp
   - Example: `output.json`, `data/converted/dev_output.json`
   
 - `--target_type` (optional): Target type - "sql" or "natsql" (default: "sql")
+  
+- `--natsql_input` (optional): Path to NatSQL dataset JSON file. If not provided and `--target_type natsql` or `--generate_both` is used, the script will try to auto-detect the NatSQL file.
+  
+- `--generate_both` (optional): Generate both SQL and NatSQL versions automatically in separate files
   
 - `--start_index` (optional): Starting index for instance_id (default: 0)
   
@@ -97,6 +132,29 @@ python generate_dataset_format.py \
     --target_type natsql
 ```
 
+### Generate Both SQL and NatSQL Versions
+```bash
+python generate_dataset_format.py \
+    --input data/spider/dev.json \
+    --output data/converted/spider_dev.json \
+    --generate_both
+```
+
+This will generate:
+- `data/converted/spider_dev_sql.json` - SQL format
+- `data/converted/spider_dev_natsql.json` - NatSQL format
+
+### Generate Both Versions with Limit
+```bash
+python generate_dataset_format.py \
+    --input data/spider/dev.json \
+    --output data/converted/spider_dev.json \
+    --generate_both \
+    --limit 1000
+```
+
+This will generate both SQL and NatSQL versions for the first 1000 entries.
+
 ## Input Format
 
 The script expects Spider dataset format with the following fields:
@@ -121,3 +179,8 @@ Each entry in the output contains:
 - Progress is shown with a progress bar for large datasets
 - Statistics are printed after conversion (total entries, unique databases, etc.)
 - Entries with missing required fields are skipped with a warning
+- When using `--generate_both`, the script automatically tries to find the NatSQL file in common locations:
+  - Same directory as input with `-natsql` suffix
+  - `NatSQL/NatSQLv1_6/` directory
+  - `data/preprocessed_data/` directory
+- If NatSQL data is not available for an entry, that entry will be skipped in the NatSQL output file

@@ -69,6 +69,7 @@ text2sql_tokenizer = None
 tables_dict = None
 all_db_infos = None
 device = None
+loaded_target_type = None  # Track which target_type the models are loaded for
 
 # Request/Response models
 class InferenceRequest(BaseModel):
@@ -112,7 +113,7 @@ def load_models(
 ):
     """Load models and prepare for inference"""
     global schema_classifier_model, schema_classifier_tokenizer
-    global text2sql_model, text2sql_tokenizer, tables_dict, all_db_infos, device
+    global text2sql_model, text2sql_tokenizer, tables_dict, all_db_infos, device, loaded_target_type
     
     device = get_device()
     print(f"Using device: {device}")
@@ -127,6 +128,13 @@ def load_models(
             schema_classifier_path = "./models/text2natsql_schema_item_classifier"
         else:
             schema_classifier_path = "./models/text2sql_schema_item_classifier"
+    
+    # Check if schema classifier exists
+    if not os.path.exists(schema_classifier_path):
+        raise FileNotFoundError(
+            f"Schema classifier not found at {schema_classifier_path}. "
+            f"Please download the schema classifier for target_type='{target_type}'."
+        )
     
     if text2sql_model_path is None:
         if target_type == "natsql":
@@ -185,6 +193,13 @@ def load_models(
     
     # Load text2sql model
     print(f"Loading text2sql model from {text2sql_model_path}...")
+    if not os.path.exists(text2sql_model_path):
+        raise FileNotFoundError(
+            f"Text2SQL model not found at {text2sql_model_path}. "
+            f"Please download the model checkpoint for target_type='{target_type}'. "
+            f"For SQL: ./models/text2sql-t5-base/checkpoint-39312, "
+            f"For NatSQL: ./models/text2natsql-t5-base/checkpoint-14352"
+        )
     text2sql_tokenizer = T5TokenizerFast.from_pretrained(
         text2sql_model_path,
         add_prefix_space=True
@@ -221,7 +236,8 @@ def load_models(
     else:
         tables_dict = {}
     
-    print("Models loaded successfully!")
+    loaded_target_type = target_type
+    print(f"Models loaded successfully for target_type: {target_type}!")
     return device
 
 def preprocess_single_question(
@@ -576,11 +592,13 @@ async def health_check():
 @app.post("/infer", response_model=InferenceResponse)
 async def infer_sql(request: InferenceRequest):
     """Generate SQL from natural language question"""
-    global schema_classifier_model, text2sql_model, all_db_infos, device
+    global schema_classifier_model, text2sql_model, all_db_infos, device, loaded_target_type
     
-    # Check if models are loaded
-    if schema_classifier_model is None or text2sql_model is None:
+    # Check if models are loaded and match the requested target_type
+    if (schema_classifier_model is None or text2sql_model is None or 
+        loaded_target_type != request.target_type):
         try:
+            print(f"Loading models for target_type: {request.target_type} (current: {loaded_target_type})")
             device = load_models(model_scale="base", target_type=request.target_type)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load models: {str(e)}")

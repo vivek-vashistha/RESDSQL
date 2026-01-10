@@ -17,11 +17,16 @@ The optimized evaluation script (`evaluate_text2sql_ckpts_optimized.py`) provide
 
 ## Usage
 
+**Important:** Make sure you're in the project root directory (e.g., `~/RESDSQL` or wherever you cloned/uploaded the project) before running any commands.
+
 ### Basic Usage
 
 Run the optimized evaluation script with default settings (4 workers):
 
 ```bash
+# Navigate to project directory first (if not already there)
+cd ~/RESDSQL  # or your project path
+
 python evaluate_text2sql_ckpts_optimized.py \
     --save_path "./models/text2natsql-t5-base" \
     --dev_filepath "./data/preprocessed_data/resdsql_test_natsql.json" \
@@ -115,7 +120,12 @@ The optimized script supports all the same arguments as the original, plus:
 
 ## Example: Full Evaluation Run
 
+**Important:** Make sure you're in the project root directory (e.g., `~/RESDSQL` or wherever you cloned/uploaded the project) before running the command.
+
 ```bash
+# Navigate to project directory first (if not already there)
+cd ~/RESDSQL  # or your project path
+
 # Evaluate all checkpoints with 8 workers
 python evaluate_text2sql_ckpts_optimized.py \
     --batch_size 8 \

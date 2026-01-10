@@ -211,41 +211,75 @@ def decode_sqls(
     num_return_sequences = generator_outputs.shape[1]
 
     final_sqls = []
+    errors = []  # Collect errors for debugging
     
     for batch_id in range(batch_size):
         pred_executable_sql = "sql placeholder"
         db_id = batch_db_ids[batch_id]
         db_file_path = db_path + "/{}/{}.sqlite".format(db_id, db_id)
         
+        # Check if database file exists
+        if not os.path.exists(db_file_path):
+            error_msg = f"Database file not found: {db_file_path}"
+            print(error_msg)
+            errors.append(error_msg)
+            final_sqls.append(pred_executable_sql)
+            continue
+        
         # print(batch_inputs[batch_id])
         # print("\n".join(tokenizer.batch_decode(generator_outputs[batch_id, :, :], skip_special_tokens = True)))
 
+        first_pred_sql = None
         for seq_id in range(num_return_sequences):
-            cursor = get_cursor_from_path(db_file_path)
-            pred_sequence = tokenizer.decode(generator_outputs[batch_id, seq_id, :], skip_special_tokens = True)
-
-            pred_sql = pred_sequence.split("|")[-1].strip()
-            pred_sql = pred_sql.replace("='", "= '").replace("!=", " !=").replace(",", " ,")
-            
             try:
-                # Note: execute_sql will be success for empty string
-                assert len(pred_sql) > 0, "pred sql is empty!"
+                cursor = get_cursor_from_path(db_file_path)
+                pred_sequence = tokenizer.decode(generator_outputs[batch_id, seq_id, :], skip_special_tokens = True)
 
-                results = execute_sql(cursor, pred_sql)
-                # if the current sql has no execution error, we record and return it
-                pred_executable_sql = pred_sql
-                cursor.close()
-                cursor.connection.close()
-                break
+                pred_sql = pred_sequence.split("|")[-1].strip()
+                pred_sql = pred_sql.replace("='", "= '").replace("!=", " !=").replace(",", " ,")
+                
+                # Store first generated SQL for debugging
+                if first_pred_sql is None:
+                    first_pred_sql = pred_sql
+                
+                try:
+                    # Note: execute_sql will be success for empty string
+                    assert len(pred_sql) > 0, "pred sql is empty!"
+
+                    results = execute_sql(cursor, pred_sql)
+                    # if the current sql has no execution error, we record and return it
+                    pred_executable_sql = pred_sql
+                    cursor.close()
+                    cursor.connection.close()
+                    break
+                except AssertionError as ae:
+                    error_msg = f"Sequence {seq_id}: Empty SQL generated"
+                    print(error_msg)
+                    errors.append(error_msg)
+                    cursor.close()
+                    cursor.connection.close()
+                except Exception as e:
+                    error_msg = f"Sequence {seq_id}: {str(e)}"
+                    print(f"SQL: {pred_sql}")
+                    print(error_msg)
+                    errors.append(error_msg)
+                    cursor.close()
+                    cursor.connection.close()
+                except FunctionTimedOut as fto:
+                    error_msg = f"Sequence {seq_id}: Timeout executing SQL"
+                    print(f"SQL: {pred_sql}")
+                    print(error_msg)
+                    errors.append(error_msg)
+                    del cursor
             except Exception as e:
-                print(pred_sql)
-                print(e)
-                cursor.close()
-                cursor.connection.close()
-            except FunctionTimedOut as fto:
-                print(pred_sql)
-                print(fto)
-                del cursor
+                error_msg = f"Sequence {seq_id}: Failed to get cursor or decode - {str(e)}"
+                print(error_msg)
+                errors.append(error_msg)
+        
+        # If all sequences failed, return the first generated SQL for debugging
+        if pred_executable_sql == "sql placeholder" and first_pred_sql:
+            pred_executable_sql = first_pred_sql
+            print(f"Warning: All SQL sequences failed execution. Returning first generated SQL: {first_pred_sql}")
         
         final_sqls.append(pred_executable_sql)
     
