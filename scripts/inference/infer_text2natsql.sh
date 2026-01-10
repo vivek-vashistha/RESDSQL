@@ -1,4 +1,6 @@
-set -e
+#!/usr/bin/env bash
+
+# set -e
 
 # Use conda Python if available, otherwise use system Python
 if [ -f "/opt/anaconda3/envs/resdsql/bin/python" ]; then
@@ -39,6 +41,13 @@ then
     input_dataset_path="./data/spider/dev.json"
     db_path="./database"
     output="./predictions/Spider-dev/$model_name/pred.sql"
+elif [ $2 = "spider-100" ]
+then
+    # small Spider dev subset (first 100 examples)
+    table_path="./data/spider/tables.json"
+    input_dataset_path="./data/spider/dev_100.json"
+    db_path="./database"
+    output="./predictions/Spider-dev-100/$model_name/pred.sql"
 elif [ $2 = "spider-realistic" ]
 then
     # spider-realistic
