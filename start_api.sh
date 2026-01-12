@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Start RESDSQL FastAPI Server
+# Start RESDSQL FastAPI Server (Refactored version that strictly reuses all components)
 # Usage: ./start_api.sh [port] [host]
 
 set -e
@@ -32,7 +32,7 @@ if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS - use CPU or MPS
         export CUDA_VISIBLE_DEVICES=""
-        echo "Running on macOS - using CPU (set device='mps' in api_server.py for Apple Silicon GPU)"
+        echo "Running on macOS - using CPU (set device='mps' in api_server_refactored.py for Apple Silicon GPU)"
     else
         # Linux - try to use GPU if available
         if command -v nvidia-smi &> /dev/null; then
@@ -44,10 +44,10 @@ if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
     fi
 fi
 
-echo "Starting RESDSQL API server on http://${HOST}:${PORT}"
+echo "Starting RESDSQL API server (refactored) on http://${HOST}:${PORT}"
 echo "API documentation available at: http://${HOST}:${PORT}/docs"
 echo "Press Ctrl+C to stop the server"
 echo ""
 
-# Start the server
-$PYTHON -m uvicorn api_server:app --host $HOST --port $PORT
+# Start the server (using refactored implementation that strictly reuses all components)
+$PYTHON -m uvicorn api_server_refactored:app --host $HOST --port $PORT
