@@ -7,6 +7,7 @@ import sys
 import json
 import torch
 import tempfile
+import numpy as np
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -422,7 +423,9 @@ def classify_schema_items_using_original(
                     col_num = len(preprocessed_data["column_labels"][table_id])
                     column_probs_flat.extend([-1] * col_num)
             
-            preprocessed_data["column_probs"] = column_probs_flat
+            # Round probabilities to match original behavior (text2sql_data_generator.py)
+            preprocessed_data["table_probs"] = [round(p, 4) for p in preprocessed_data["table_probs"]]
+            preprocessed_data["column_probs"] = [round(p, 2) for p in column_probs_flat]
         
         return preprocessed_data
     finally:
@@ -446,9 +449,9 @@ def generate_input_sequence_using_original(
     table_probs = preprocessed_data.get("table_probs", [0] * len(preprocessed_data["db_schema"]))
     column_probs = preprocessed_data.get("column_probs", [])
     
-    # Sort tables by probability - REUSE logic from text2sql_data_generator.py
-    table_indices = sorted(range(len(table_probs)), key=lambda i: table_probs[i], reverse=True)
-    topk_tables = table_indices[:topk_table_num]
+    # Sort tables by probability - REUSE logic from text2sql_data_generator.py (using stable sort)
+    topk_table_ids = np.argsort(-np.array(table_probs), kind="stable")[:topk_table_num].tolist()
+    topk_tables = topk_table_ids
     
     # Build ranked schema - REUSE logic from text2sql_data_generator.py
     ranked_schema = []
@@ -460,9 +463,9 @@ def generate_input_sequence_using_original(
         num_cols = len(table["column_names_original"])
         table_col_probs = column_probs[col_idx:col_idx+num_cols] if col_idx < len(column_probs) else [0] * num_cols
         
-        # Sort columns by probability
-        col_indices = sorted(range(len(table_col_probs)), key=lambda i: table_col_probs[i], reverse=True)
-        topk_cols = col_indices[:min(topk_column_num, len(col_indices))]
+        # Sort columns by probability - REUSE logic from text2sql_data_generator.py (using stable sort)
+        topk_column_ids = np.argsort(-np.array(table_col_probs), kind="stable")[:topk_column_num].tolist()
+        topk_cols = topk_column_ids[:min(topk_column_num, len(topk_column_ids))]
         
         ranked_table = {
             "table_name_original": table["table_name_original"],
@@ -472,11 +475,24 @@ def generate_input_sequence_using_original(
         ranked_schema.append(ranked_table)
         col_idx += num_cols
     
+    # Filter foreign keys based on selected tables - REUSE logic from text2sql_data_generator.py
+    table_names_original = [table["table_name_original"] for table in preprocessed_data["db_schema"]]
+    needed_fks = []
+    for fk in preprocessed_data["fk"]:
+        try:
+            source_table_id = table_names_original.index(fk["source_table_name_original"])
+            target_table_id = table_names_original.index(fk["target_table_name_original"])
+            if source_table_id in topk_tables and target_table_id in topk_tables:
+                needed_fks.append(fk)
+        except ValueError:
+            # Skip FK if table not found (shouldn't happen, but safe guard)
+            continue
+    
     # Create ranked data structure - REUSE structure from text2sql_data_generator.py
     ranked_data = {
         "question": preprocessed_data["question"],
         "db_schema": ranked_schema,
-        "fk": preprocessed_data["fk"],
+        "fk": needed_fks,  # Use filtered FKs instead of all FKs
         "norm_sql": "",
         "norm_natsql": "",
         "sql_skeleton": "",
@@ -494,11 +510,13 @@ def generate_input_sequence_using_original(
     opt = Opt(use_contents, add_fk_info, target_type)
     input_sequence, _ = prepare_input_and_output(opt, ranked_data)
     
-    # Extract tc_original for SQL generation
+    # Extract tc_original for SQL generation - REUSE logic from text2sql_data_generator.py
+    # Note: In eval/test mode, order is column_names_original + ["*"] (line 249)
     tc_original = []
     for table in ranked_schema:
         table_name = table.get("table_name_original", "")
-        for col_name in table.get("column_names_original", []):
+        # Include "*" wildcard (critical for count(*) queries)
+        for col_name in table.get("column_names_original", []) + ["*"]:
             tc_original.append(f"{table_name}.{col_name}")
     
     return input_sequence, ranked_data, tc_original
