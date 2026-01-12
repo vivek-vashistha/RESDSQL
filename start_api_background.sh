@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Start RESDSQL FastAPI Server in the background
+# Start RESDSQL FastAPI Server in the background (Refactored version that strictly reuses all components)
 # Usage: ./start_api_background.sh [port] [host]
 
 set -e
@@ -32,7 +32,7 @@ if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS - use CPU or MPS
         export CUDA_VISIBLE_DEVICES=""
-        echo "Running on macOS - using CPU (set device='mps' in api_server.py for Apple Silicon GPU)"
+        echo "Running on macOS - using CPU (set device='mps' in api_server_refactored.py for Apple Silicon GPU)"
     else
         # Linux - try to use GPU if available
         if command -v nvidia-smi &> /dev/null; then
@@ -51,7 +51,7 @@ mkdir -p logs
 LOG_FILE="logs/api_server_${PORT}.log"
 PID_FILE="logs/api_server_${PORT}.pid"
 
-echo "Starting RESDSQL API server in background on http://${HOST}:${PORT}"
+echo "Starting RESDSQL API server (refactored) in background on http://${HOST}:${PORT}"
 echo "Logs will be written to: ${LOG_FILE}"
 echo "PID file: ${PID_FILE}"
 echo ""
@@ -70,9 +70,9 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-# Start the server in background with nohup
+# Start the server in background with nohup (using refactored implementation that strictly reuses all components)
 cd "$(dirname "$0")"
-nohup $PYTHON -m uvicorn api_server:app --host $HOST --port $PORT > "$LOG_FILE" 2>&1 &
+nohup $PYTHON -m uvicorn api_server_refactored:app --host $HOST --port $PORT > "$LOG_FILE" 2>&1 &
 
 # Save the PID
 SERVER_PID=$!
