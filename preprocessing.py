@@ -1,10 +1,19 @@
 import re
 import json
 import argparse
+import os
 
 from utils.bridge_content_encoder import get_database_matches
 from sql_metadata import Parser
 from tqdm import tqdm
+
+# Import Spider2 support
+try:
+    from utils.database_adapters import get_database_adapter
+    from utils.spider2_converter import extract_db_type_from_spider2, get_connection_info_from_spider2
+    SPIDER2_AVAILABLE = True
+except ImportError:
+    SPIDER2_AVAILABLE = False
 
 sql_keywords = ['select', 'from', 'where', 'group', 'order', 'limit', 'intersect', 'union', \
     'except', 'join', 'on', 'as', 'not', 'between', 'in', 'like', 'is', 'exists', 'max', 'min', \
@@ -32,24 +41,74 @@ def parse_option():
     parser.add_argument('--db_path', type = str, default = "./data/spider/database", 
                         help = "the filepath of database.")
     parser.add_argument("--target_type", type = str, default = "sql",
-                        help = "sql or natsql.")
+                help = "sql or natsql.")
+    parser.add_argument("--spider2_mode", action='store_true',
+                help = "Enable Spider2 mode (supports cloud databases).")
+    parser.add_argument("--spider2_db_mapping", type = str, default = None,
+                help = "Path to JSON file mapping db_id to database type and connection info (optional).")
 
     opt = parser.parse_args()
 
     return opt
 
-def get_db_contents(question, table_name_original, column_names_original, db_id, db_path):
+def get_db_contents(question, table_name_original, column_names_original, db_id, db_path, 
+                    spider2_mode=False, db_type=None, connection_info=None, db_adapter=None):
+    """Get database contents for schema linking.
+    
+    Args:
+        question: Natural language question
+        table_name_original: Original table name
+        column_names_original: List of original column names
+        db_id: Database identifier
+        db_path: Database path (for SQLite) or base path
+        spider2_mode: Whether in Spider2 mode
+        db_type: Database type ('sqlite', 'snowflake', 'bigquery')
+        connection_info: Connection information dictionary
+        db_adapter: Optional pre-initialized database adapter
+    """
     matched_contents = []
-    # extract matched contents for each column
-    for column_name_original in column_names_original:
-        matches = get_database_matches(
-            question, 
-            table_name_original, 
-            column_name_original, 
-            db_path + "/{}/{}.sqlite".format(db_id, db_id)
-        )
-        matches = sorted(matches)
-        matched_contents.append(matches)
+    
+    if spider2_mode and SPIDER2_AVAILABLE and db_type and db_type != 'sqlite':
+        # Use database adapter for cloud databases
+        if db_adapter is None:
+            adapter = get_database_adapter(db_type)
+            adapter.connect(connection_info)
+        else:
+            adapter = db_adapter
+        
+        try:
+            for column_name_original in column_names_original:
+                # Get sample data from cloud database
+                samples = adapter.get_sample_data(table_name_original, column_name_original, limit=10)
+                # Use rapidfuzz for matching (similar to get_database_matches)
+                from rapidfuzz import fuzz
+                matches = []
+                question_lower = question.lower()
+                
+                for sample in samples:
+                    sample_str = str(sample).lower()
+                    # Simple fuzzy matching
+                    ratio = fuzz.partial_ratio(question_lower, sample_str)
+                    if ratio >= 85:  # Similar threshold to get_database_matches
+                        matches.append(sample)
+                
+                matches = sorted(matches)[:2]  # Top 2 matches
+                matched_contents.append(matches)
+        finally:
+            if db_adapter is None and adapter:
+                adapter.close()
+    else:
+        # Original SQLite path
+        sqlite_path = db_path + "/{}/{}.sqlite".format(db_id, db_id)
+        for column_name_original in column_names_original:
+            matches = get_database_matches(
+                question, 
+                table_name_original, 
+                column_name_original, 
+                sqlite_path
+            )
+            matches = sorted(matches)
+            matched_contents.append(matches)
     
     return matched_contents
 
@@ -272,10 +331,23 @@ def main(opt):
     all_db_infos = json.load(open(opt.table_path))
     
     assert opt.mode in ["train", "eval", "test"]
+    
+    # Load Spider2 database mapping if provided
+    db_type_map = {}
+    connection_info_map = {}
+    if opt.spider2_mode and opt.spider2_db_mapping and os.path.exists(opt.spider2_db_mapping):
+        with open(opt.spider2_db_mapping, 'r') as f:
+            mapping = json.load(f)
+            for db_id, info in mapping.items():
+                db_type_map[db_id] = info.get('db_type', 'sqlite')
+                connection_info_map[db_id] = info.get('connection_info', {})
 
     if opt.mode in ["train", "eval"] and opt.target_type == "natsql":
         # only train_spider.json and dev.json have corresponding natsql dataset
-        natsql_dataset = json.load(open(opt.natsql_dataset_path))
+        if os.path.exists(opt.natsql_dataset_path):
+            natsql_dataset = json.load(open(opt.natsql_dataset_path))
+        else:
+            natsql_dataset = [None for _ in range(len(dataset))]
     else:
         # empty natsql dataset
         natsql_dataset = [None for _ in range(len(dataset))]
@@ -350,13 +422,26 @@ def main(opt):
         preprocessed_data["column_labels"] = []
         
         # add database information (including table name, column name, ..., table_labels, and column labels)
+        # Get database type and connection info for Spider2 mode
+        db_type = None
+        connection_info = None
+        if opt.spider2_mode:
+            db_type = db_type_map.get(db_id, 'sqlite')
+            connection_info = connection_info_map.get(db_id, {})
+            if db_type == 'sqlite' and not connection_info:
+                # Default SQLite connection info
+                connection_info = {'db_path': opt.db_path + "/{}/{}.sqlite".format(db_id, db_id)}
+        
         for table in db_schemas[db_id]["schema_items"]:
             db_contents = get_db_contents(
                 question, 
                 table["table_name_original"], 
                 table["column_names_original"], 
                 db_id, 
-                opt.db_path
+                opt.db_path,
+                spider2_mode=opt.spider2_mode,
+                db_type=db_type,
+                connection_info=connection_info
             )
 
             preprocessed_data["db_schema"].append({

@@ -37,6 +37,15 @@ from transformers import RobertaTokenizerFast, XLMRobertaTokenizerFast
 import preprocessing
 import text2sql_data_generator
 
+# Import Spider2 support
+try:
+    from utils.database_adapters import get_database_adapter
+    from utils.spider2_converter import extract_db_type_from_spider2, get_connection_info_from_spider2
+    SPIDER2_AVAILABLE = True
+except ImportError:
+    SPIDER2_AVAILABLE = False
+    print("Warning: Spider2 support not available")
+
 # For NatSQL
 try:
     from NatSQL.natsql_utils import natsql_to_sql
@@ -68,8 +77,16 @@ text2sql_model = None
 text2sql_tokenizer = None
 tables_dict = None
 all_db_infos = None
+current_tables_path = None  # Track current tables.json path
 device = None
 loaded_target_type = None  # Track which target_type the models are loaded for
+spider2_mode = False  # Track if using Spider2 mode
+db_type_map = {}  # Cache for database types (db_id -> db_type)
+connection_info_map = {}  # Cache for connection info (db_id -> connection_info)
+db_adapter_cache = {}  # Cache for database adapters (db_id -> adapter)
+
+# Connection pool for SQLite databases (for faster preprocessing)
+sqlite_connection_pool = {}  # db_path -> sqlite3.Connection
 
 # Request/Response models
 class InferenceRequest(BaseModel):
@@ -82,6 +99,8 @@ class InferenceRequest(BaseModel):
     topk_column_num: Optional[int] = 5
     num_beams: Optional[int] = 8
     num_return_sequences: Optional[int] = 8
+    spider2_mode: Optional[bool] = False  # Enable Spider2 mode
+    tables_path: Optional[str] = None  # Optional: path to tables.json (for Spider2)
 
 class InferenceResponse(BaseModel):
     sql: str
@@ -245,9 +264,25 @@ def preprocess_single_question(
     db_id: str,
     all_db_infos: List[Dict],
     db_path: str,
-    target_type: str = "natsql"
+    target_type: str = "natsql",
+    spider2_mode: bool = False,
+    db_type: Optional[str] = None,
+    connection_info: Optional[Dict] = None,
+    db_adapter: Optional[Any] = None
 ):
-    """Preprocess a single question for inference"""
+    """Preprocess a single question for inference
+    
+    Args:
+        question: Natural language question
+        db_id: Database identifier
+        all_db_infos: List of database schema information
+        db_path: Base path for databases
+        target_type: "sql" or "natsql"
+        spider2_mode: Whether in Spider2 mode
+        db_type: Database type for Spider2 ('sqlite', 'snowflake', 'bigquery')
+        connection_info: Connection info for Spider2 databases
+        db_adapter: Optional pre-initialized database adapter
+    """
     db_schemas = get_db_schemas(all_db_infos)
     
     # Find the database info
@@ -315,7 +350,11 @@ def preprocess_single_question(
                 table_name_original,
                 column_names_list,
                 db_id,
-                db_path
+                db_path,
+                spider2_mode=spider2_mode,
+                db_type=db_type,
+                connection_info=connection_info,
+                db_adapter=db_adapter
             )
         else:
             db_contents_list = []
@@ -593,6 +632,7 @@ async def health_check():
 async def infer_sql(request: InferenceRequest):
     """Generate SQL from natural language question"""
     global schema_classifier_model, text2sql_model, all_db_infos, device, loaded_target_type
+    global spider2_mode, db_type_map, connection_info_map, db_adapter_cache, current_tables_path
     
     # Check if models are loaded and match the requested target_type
     if (schema_classifier_model is None or text2sql_model is None or 
@@ -606,12 +646,108 @@ async def infer_sql(request: InferenceRequest):
     try:
         # Set paths
         db_path = "./database"
-        tables_path = "./data/spider/tables.json"
+        tables_path = request.tables_path or "./data/spider/tables.json"
         
-        # Load tables if not loaded
-        if all_db_infos is None:
+        # Normalize path (resolve relative paths)
+        tables_path = os.path.abspath(tables_path)
+        
+        # Load tables if not loaded, if path changed, or if spider2_mode changed
+        if (all_db_infos is None or 
+            current_tables_path != tables_path or 
+            spider2_mode != request.spider2_mode):
+            
+            if not os.path.exists(tables_path):
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Tables file not found: {tables_path}"
+                )
+            
             with open(tables_path, 'r', encoding='utf-8') as f:
                 all_db_infos = json.load(f)
+            
+            current_tables_path = tables_path
+            spider2_mode = request.spider2_mode
+            
+            # Clear caches when switching datasets
+            db_type_map.clear()
+            connection_info_map.clear()
+            # Close and clear adapter cache
+            for adapter in db_adapter_cache.values():
+                if adapter:
+                    try:
+                        adapter.close()
+                    except:
+                        pass
+            db_adapter_cache.clear()
+            
+            # Initialize Spider2 database type mapping if in Spider2 mode
+            if spider2_mode and SPIDER2_AVAILABLE:
+                # Infer db_type from db_id patterns (Spider2 uses db field as db_id)
+                for db in all_db_infos:
+                    db_id = db.get("db_id", "")
+                    # Infer from db_id pattern (local* = sqlite, bq* = bigquery, sf*/snow* = snowflake)
+                    if db_id.startswith("local") or not any([db_id.startswith("bq"), db_id.startswith("sf"), db_id.startswith("snow")]):
+                        db_type_map[db_id] = "sqlite"
+                        connection_info_map[db_id] = {'db_path': f"{db_path}/{db_id}/{db_id}.sqlite"}
+                    elif db_id.startswith("bq"):
+                        db_type_map[db_id] = "bigquery"
+                        # Connection info will be set from environment variables
+                        connection_info_map[db_id] = {}
+                    elif db_id.startswith("sf") or db_id.startswith("snow"):
+                        db_type_map[db_id] = "snowflake"
+                        # Connection info will be set from environment variables
+                        connection_info_map[db_id] = {}
+                    else:
+                        # Default to sqlite
+                        db_type_map[db_id] = "sqlite"
+                        connection_info_map[db_id] = {'db_path': f"{db_path}/{db_id}/{db_id}.sqlite"}
+        
+        # Get database type and connection info for Spider2
+        db_type = None
+        connection_info = None
+        db_adapter = None
+        
+        if spider2_mode and SPIDER2_AVAILABLE:
+            db_type = db_type_map.get(request.db_id, "sqlite")
+            connection_info = connection_info_map.get(request.db_id, {})
+            
+            # For cloud databases, populate connection info from environment variables if needed
+            if db_type in ["bigquery", "snowflake"] and not connection_info:
+                # Build connection info from environment variables
+                if db_type == "snowflake":
+                    connection_info = {
+                        'user': os.getenv('SNOWFLAKE_USER'),
+                        'password': os.getenv('SNOWFLAKE_PASSWORD'),
+                        'account': os.getenv('SNOWFLAKE_ACCOUNT'),
+                        'warehouse': os.getenv('SNOWFLAKE_WAREHOUSE'),
+                        'database': request.db_id,  # Use db_id as database name
+                        'schema': os.getenv('SNOWFLAKE_SCHEMA', 'PUBLIC')
+                    }
+                elif db_type == "bigquery":
+                    connection_info = {
+                        'project_id': os.getenv('GOOGLE_CLOUD_PROJECT'),
+                        'dataset_id': request.db_id,  # Use db_id as dataset ID
+                        'credentials_path': os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+                    }
+                connection_info_map[request.db_id] = connection_info
+            
+            # Reuse or create database adapter (for connection pooling)
+            if request.db_id not in db_adapter_cache:
+                if db_type == "sqlite":
+                    # SQLite adapters are created on-demand in get_db_contents
+                    db_adapter = None
+                else:
+                    # For cloud databases, create and cache adapter
+                    try:
+                        adapter = get_database_adapter(db_type)
+                        adapter.connect(connection_info)
+                        db_adapter_cache[request.db_id] = adapter
+                        db_adapter = adapter
+                    except Exception as e:
+                        print(f"Warning: Could not create adapter for {request.db_id}: {e}")
+                        db_adapter = None
+            else:
+                db_adapter = db_adapter_cache[request.db_id]
         
         # Step 1: Preprocess
         preprocessed_data = preprocess_single_question(
@@ -619,7 +755,11 @@ async def infer_sql(request: InferenceRequest):
             request.db_id,
             all_db_infos,
             db_path,
-            request.target_type
+            request.target_type,
+            spider2_mode=spider2_mode,
+            db_type=db_type,
+            connection_info=connection_info,
+            db_adapter=db_adapter
         )
         
         # Step 2: Classify schema items

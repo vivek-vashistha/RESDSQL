@@ -10,7 +10,7 @@ def is_float(s):
         right = s.split('.')[1]
         if right.isdigit():
             if left.count('-')==1 and left.startswith('-'):
-                num = left.split['-'][-1]
+                num = left.split('-')[-1]
                 if num.isdigit():
                     return True
             elif left.isdigit():

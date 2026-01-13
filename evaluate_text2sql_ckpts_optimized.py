@@ -21,14 +21,14 @@ def parse_option():
                         help = 'the evaluation results of fine-tuned text2sql models.')
     parser.add_argument('--mode', type = str, default = "eval",
                         help='eval.')
-    parser.add_argument('--dev_filepath', type = str, default = "./data/pre-processing/resdsql_test.json",
-                        help = 'file path of test2sql dev set.')
+    parser.add_argument('--dev_filepath', type = str, default = "./data/preprocessed_data/resdsql_test_natsql.json",
+                        help = 'file path of test2sql dev set (should match target_type: resdsql_test_natsql.json for natsql, resdsql_test.json for sql).')
     parser.add_argument('--original_dev_filepath', type = str, default = "./data/spider/dev.json",
                         help = 'file path of the original dev set (for registing evaluator).')
-    parser.add_argument('--db_path', type = str, default = "./data/spider/database",
+    parser.add_argument('--db_path', type = str, default = "./database",
                         help = 'file path of database.')
-    parser.add_argument('--tables_for_natsql', type = str, default = "NatSQL/NatSQLv1_6/tables_for_natsql.json",
-                        help = 'file path of tables_for_natsql.json.')
+    parser.add_argument('--tables_for_natsql', type = str, default = "./data/preprocessed_data/test_tables_for_natsql.json",
+                        help = 'file path of tables_for_natsql.json (should use test_tables_for_natsql.json for dev/test evaluation).')
     parser.add_argument('--num_beams', type = int, default = 8,
                         help = 'beam size in model.generate() function.')
     parser.add_argument('--num_return_sequences', type = int, default = 8,
@@ -62,16 +62,34 @@ def _test_optimized(opt):
     set_seed(opt.seed)
     print(opt)
     print(f"Using optimized evaluator with {opt.num_workers} workers (parallel: {opt.use_parallel})")
+    print(f"Target type: {opt.target_type}")
+    print(f"Dev filepath: {opt.dev_filepath}")
+    print(f"Database path: {opt.db_path}")
 
     start_time = time.time()
     
     os.environ["CUDA_VISIBLE_DEVICES"] = opt.device
     
+    # Verify dev_filepath exists
+    if not os.path.exists(opt.dev_filepath):
+        raise FileNotFoundError(
+            f"Dev file not found at {opt.dev_filepath}. "
+            f"Please ensure the file exists or specify the correct path with --dev_filepath"
+        )
+    
+    # Initialize table_dict for NatSQL mode (similar to API server fix)
+    table_dict = None
     if opt.target_type == "natsql":
-        tables = json.load(open(opt.tables_for_natsql,'r'))
+        if not os.path.exists(opt.tables_for_natsql):
+            raise FileNotFoundError(
+                f"NatSQL tables file not found at {opt.tables_for_natsql}. "
+                f"Please ensure the file exists or specify the correct path with --tables_for_natsql"
+            )
+        tables = json.load(open(opt.tables_for_natsql, 'r', encoding='utf-8'))
         table_dict = dict()
         for t in tables:
             table_dict[t["db_id"]] = t
+        print(f"Loaded {len(table_dict)} databases for NatSQL evaluation")
 
     # initialize tokenizer
     tokenizer = T5TokenizerFast.from_pretrained(
@@ -144,6 +162,11 @@ def _test_optimized(opt):
                     batch_tc_original
                 )
             elif opt.target_type == "natsql":
+                if table_dict is None or len(table_dict) == 0:
+                    raise ValueError(
+                        f"table_dict is not initialized for NatSQL mode. "
+                        f"Please ensure --tables_for_natsql points to a valid file."
+                    )
                 predict_sqls += decode_natsqls(
                     opt.db_path, 
                     model_outputs, 
@@ -154,7 +177,7 @@ def _test_optimized(opt):
                     table_dict
                 )
             else:
-                raise ValueError()
+                raise ValueError(f"Invalid target_type: {opt.target_type}. Must be 'sql' or 'natsql'")
     
     new_dir = "/".join(opt.output.split("/")[:-1]).strip()
     if new_dir != "":

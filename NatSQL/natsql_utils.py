@@ -16,7 +16,11 @@ def natsql_to_sql(natsql, db_id, db_file_path, table_info):
             remove_groupby_from_natsql=False, 
             args=natsql2sql_args
         )
-    except:
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Error in natsql_to_sql for db_id={db_id}: {e}")
+        import traceback
+        traceback.print_exc()
         query = "sql placeholder"
     
     if query == None:
