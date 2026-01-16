@@ -151,54 +151,72 @@ fi
 # Step 3: Preprocess test set
 echo ""
 echo "Step 3: Preprocessing test set..."
-$PYTHON preprocessing.py \
-    --mode "test" \
-    --table_path "$table_path" \
-    --input_dataset_path "$input_dataset_path" \
-    --output_dataset_path "./data/preprocessed_data/preprocessed_test_natsql_spider2.json" \
-    --db_path "$db_path" \
-    --target_type "natsql" \
-    --spider2_mode
+preprocessed_output="./data/preprocessed_data/preprocessed_test_natsql_spider2.json"
+if [ -f "$preprocessed_output" ]; then
+    echo "  Preprocessed file already exists, skipping preprocessing..."
+    echo "  File: $preprocessed_output"
+else
+    $PYTHON preprocessing.py \
+        --mode "test" \
+        --table_path "$table_path" \
+        --input_dataset_path "$input_dataset_path" \
+        --output_dataset_path "$preprocessed_output" \
+        --db_path "$db_path" \
+        --target_type "natsql" \
+        --spider2_mode
 
-if [ $? -ne 0 ]; then
-    echo "Error: Preprocessing failed"
-    exit 1
+    if [ $? -ne 0 ]; then
+        echo "Error: Preprocessing failed"
+        exit 1
+    fi
 fi
 
 # Step 4: Predict probability for each schema item
 echo ""
 echo "Step 4: Classifying schema items..."
-$PYTHON schema_item_classifier.py \
-    --batch_size 32 \
-    --device "$device" \
-    --seed 42 \
-    --save_path "./models/text2natsql_schema_item_classifier" \
-    --dev_filepath "./data/preprocessed_data/preprocessed_test_natsql_spider2.json" \
-    --output_filepath "./data/preprocessed_data/test_with_probs_natsql_spider2.json" \
-    --use_contents \
-    --mode "test"
+schema_classifier_output="./data/preprocessed_data/test_with_probs_natsql_spider2.json"
+if [ -f "$schema_classifier_output" ]; then
+    echo "  Schema classification file already exists, skipping..."
+    echo "  File: $schema_classifier_output"
+else
+    $PYTHON schema_item_classifier.py \
+        --batch_size 32 \
+        --device "$device" \
+        --seed 42 \
+        --save_path "./models/text2natsql_schema_item_classifier" \
+        --dev_filepath "./data/preprocessed_data/preprocessed_test_natsql_spider2.json" \
+        --output_filepath "$schema_classifier_output" \
+        --use_contents \
+        --mode "test"
 
-if [ $? -ne 0 ]; then
-    echo "Error: Schema classification failed"
-    exit 1
+    if [ $? -ne 0 ]; then
+        echo "Error: Schema classification failed"
+        exit 1
+    fi
 fi
 
 # Step 5: Generate text2natsql test set
 echo ""
 echo "Step 5: Generating text2natsql test set..."
-$PYTHON text2sql_data_generator.py \
-    --input_dataset_path "./data/preprocessed_data/test_with_probs_natsql_spider2.json" \
-    --output_dataset_path "./data/preprocessed_data/resdsql_test_natsql_spider2.json" \
-    --topk_table_num 4 \
-    --topk_column_num 5 \
-    --mode "test" \
-    --use_contents \
-    --output_skeleton \
-    --target_type "natsql"
+ranked_dataset_output="./data/preprocessed_data/resdsql_test_natsql_spider2.json"
+if [ -f "$ranked_dataset_output" ]; then
+    echo "  Ranked dataset file already exists, skipping..."
+    echo "  File: $ranked_dataset_output"
+else
+    $PYTHON text2sql_data_generator.py \
+        --input_dataset_path "./data/preprocessed_data/test_with_probs_natsql_spider2.json" \
+        --output_dataset_path "$ranked_dataset_output" \
+        --topk_table_num 4 \
+        --topk_column_num 5 \
+        --mode "test" \
+        --use_contents \
+        --output_skeleton \
+        --target_type "natsql"
 
-if [ $? -ne 0 ]; then
-    echo "Error: Dataset generation failed"
-    exit 1
+    if [ $? -ne 0 ]; then
+        echo "Error: Dataset generation failed"
+        exit 1
+    fi
 fi
 
 # Step 6: Inference using the text2natsql model

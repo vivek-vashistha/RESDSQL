@@ -159,16 +159,9 @@ def decode_natsqls(
         for seq_id in range(num_return_sequences):
             cursor = get_cursor_from_path(db_file_path)
             pred_sequence = tokenizer.decode(generator_outputs[batch_id, seq_id, :], skip_special_tokens = True)
-            
-            # Debug: print the generated sequence
-            print(f"Generated sequence {seq_id}: {pred_sequence[:200]}...")
 
             pred_natsql = pred_sequence.split("|")[-1].strip()
             pred_natsql = pred_natsql.replace("='", "= '").replace("!=", " !=").replace(",", " ,")
-            
-            # Debug: print the extracted NatSQL
-            print(f"Extracted NatSQL: {pred_natsql}")
-            
             old_pred_natsql = pred_natsql
             # if the predicted natsql has some fatal errors, try to correct it
             pred_natsql = fix_fatal_errors_in_natsql(pred_natsql, batch_tc_original[batch_id])
@@ -179,10 +172,7 @@ def decode_natsqls(
             # Check if db_id exists in table_dict
             if db_id not in table_dict:
                 raise KeyError(f"Database '{db_id}' not found in NatSQL tables dictionary. Available databases: {list(table_dict.keys())[:10]}...")
-            
-            print(f"Converting NatSQL to SQL for db_id={db_id}, db_file_path={db_file_path}")
             pred_sql = natsql_to_sql(pred_natsql, db_id, db_file_path, table_dict[db_id]).strip()
-            print(f"Generated SQL: {pred_sql}")
             
             # try to execute the predicted sql
             try:

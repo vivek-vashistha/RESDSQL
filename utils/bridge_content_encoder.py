@@ -219,7 +219,8 @@ def get_column_picklist(table_name: str, column_name: str, db_path: str) -> list
     except Exception as e:
         picklist = []
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     return picklist
 
 

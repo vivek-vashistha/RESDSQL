@@ -497,10 +497,14 @@ if __name__ == "__main__":
                 truncated_data_info.append([data_id, truncated_table_ids])
 
         # additionally, we need to consider and predict discarded tables and columns
-        while len(truncated_data_info) != 0:
+        max_iterations = 10  # Safety limit to prevent infinite loops
+        iteration_count = 0
+        while len(truncated_data_info) != 0 and iteration_count < max_iterations:
+            iteration_count += 1
+            print(f"\n[Iteration {iteration_count}/{max_iterations}] Processing {len(truncated_data_info)} truncated examples...")
             truncated_dataset = []
             for truncated_data_id, truncated_table_ids in truncated_data_info:
-                print(dataset[truncated_data_id]["question"])
+                print(f"  Processing: {dataset[truncated_data_id]['question'][:80]}...")
                 truncated_data = deepcopy(dataset[truncated_data_id])
                 truncated_data["db_schema"] = [truncated_data["db_schema"][table_id] for table_id in truncated_table_ids]
                 truncated_data["table_labels"] = [truncated_data["table_labels"][table_id] for table_id in truncated_table_ids]
@@ -510,6 +514,8 @@ if __name__ == "__main__":
                 
                 truncated_dataset.append(truncated_data)
             
+            # Ensure directory exists
+            os.makedirs("./data/pre-processing", exist_ok=True)
             with open("./data/pre-processing/truncated_dataset.json", "w") as f:
                 f.write(json.dumps(truncated_dataset, indent = 2, ensure_ascii = False))
             
@@ -559,6 +565,23 @@ if __name__ == "__main__":
                     truncated_data_info.append([data_id, truncated_table_ids])
             
             os.remove("./data/pre-processing/truncated_dataset.json")
+            
+            if iteration_count >= max_iterations and len(truncated_data_info) > 0:
+                print(f"\n⚠️  WARNING: Reached maximum iterations ({max_iterations})")
+                print(f"   {len(truncated_data_info)} examples still have incomplete predictions")
+                print(f"   These will be saved with -1 values for unpredicted tables/columns")
+                # Fill remaining with -1 to break the loop
+                for data_id, truncated_table_ids in truncated_data_info:
+                    for table_id in truncated_table_ids:
+                        if dataset[data_id]["table_pred_probs"][table_id] == -1:
+                            dataset[data_id]["table_pred_probs"][table_id] = 0.0  # Default to 0.0 instead of -1
+                        if -1 in dataset[data_id]["column_pred_probs"][table_id]:
+                            # Replace -1 with 0.0
+                            dataset[data_id]["column_pred_probs"][table_id] = [
+                                0.0 if x == -1 else x 
+                                for x in dataset[data_id]["column_pred_probs"][table_id]
+                            ]
+                break
 
         with open(opt.output_filepath, "w") as f:
             f.write(json.dumps(dataset, indent = 2, ensure_ascii = False))
