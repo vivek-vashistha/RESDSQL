@@ -371,21 +371,33 @@ def evaluate_api_results(
     target_type: str = "natsql",
     api_timeout: int = 600,
     max_retries: int = 2,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    filter_gold_sql: bool = False
 ) -> Dict[str, Any]:
-    """Main evaluation function."""
+    """Main evaluation function.
+    
+    Args:
+        filter_gold_sql: If True, only process entries with gold_sql_available: true.
+                         If False (default), process all entries regardless of gold_sql_available flag.
+    """
     
     # Load dataset
     print(f"Loading dataset from {input_json_path}...")
     dataset = load_dataset(input_json_path)
     print(f"Loaded {len(dataset)} entries")
     
-    # Filter for entries with gold_sql_available: true
-    filtered_entries = [
-        entry for entry in dataset 
-        if entry.get('metadata', {}).get('gold_sql_available', False) is True
-    ]
-    print(f"Found {len(filtered_entries)} entries with gold_sql_available: true")
+    # Filter entries based on filter_gold_sql flag
+    if filter_gold_sql:
+        filtered_entries = [
+            entry for entry in dataset 
+            if entry.get('metadata', {}).get('gold_sql_available', False) is True
+        ]
+        print(f"Filtering for entries with gold_sql_available: true")
+        print(f"Found {len(filtered_entries)} entries with gold_sql_available: true")
+    else:
+        filtered_entries = dataset
+        print(f"Processing ALL entries (not filtering by gold_sql_available)")
+        print(f"Total entries to process: {len(filtered_entries)}")
     
     # Apply limit if specified
     if limit is not None and limit > 0:
@@ -826,10 +838,19 @@ if __name__ == "__main__":
         "--limit",
         type=int,
         default=None,
-        help="Limit number of entries to process (for testing). Only processes entries with gold_sql_available: true"
+        help="Limit number of entries to process (for testing)"
+    )
+    parser.add_argument(
+        "--only_gold_sql",
+        action="store_true",
+        default=False,
+        help="Only process entries with gold_sql_available: true. If not set, processes all entries (default: False)"
     )
     
     args = parser.parse_args()
+    
+    # Determine filter_gold_sql value: --only_gold_sql means filter, otherwise process all
+    filter_gold_sql = args.only_gold_sql
     
     # Resolve paths relative to script location
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -867,5 +888,6 @@ if __name__ == "__main__":
         target_type=args.target_type,
         api_timeout=args.api_timeout,
         max_retries=args.max_retries,
-        limit=args.limit
+        limit=args.limit,
+        filter_gold_sql=filter_gold_sql
     )
