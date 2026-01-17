@@ -199,6 +199,7 @@ def get_matched_entries(
 @functools.lru_cache(maxsize=1000, typed=False)
 def get_column_picklist(table_name: str, column_name: str, db_path: str) -> list:
     fetch_sql = "SELECT DISTINCT `{}` FROM `{}`".format(column_name, table_name)
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         conn.text_factory = bytes
