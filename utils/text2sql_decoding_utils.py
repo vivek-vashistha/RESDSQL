@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import re
 
 from difflib import SequenceMatcher
 from NatSQL.natsql_utils import natsql_to_sql
@@ -160,19 +161,73 @@ def decode_natsqls(
             cursor = get_cursor_from_path(db_file_path)
             pred_sequence = tokenizer.decode(generator_outputs[batch_id, seq_id, :], skip_special_tokens = True)
 
+            # DEBUG: Log the full model output sequence
+            if seq_id == 0:  # Only log for first sequence to avoid spam
+                print("\n" + "="*80)
+                print("DEBUG: Model Generation Analysis")
+                print("="*80)
+                print(f"Input Sequence: {batch_inputs[batch_id][:200]}..." if len(batch_inputs[batch_id]) > 200 else f"Input Sequence: {batch_inputs[batch_id]}")
+                print(f"Full Model Output: {pred_sequence}")
+                print("-"*80)
+
             pred_natsql = pred_sequence.split("|")[-1].strip()
             pred_natsql = pred_natsql.replace("='", "= '").replace("!=", " !=").replace(",", " ,")
             old_pred_natsql = pred_natsql
+            
+            # DEBUG: Log the extracted NatSQL before fixes
+            if seq_id == 0:
+                print(f"Extracted NatSQL (before fixes): {pred_natsql}")
+            
             # if the predicted natsql has some fatal errors, try to correct it
             pred_natsql = fix_fatal_errors_in_natsql(pred_natsql, batch_tc_original[batch_id])
             if old_pred_natsql != pred_natsql:
                 print("Before fix:", old_pred_natsql)
                 print("After fix:", pred_natsql)
                 print("---------------")
+            
+            # DEBUG: Log the final NatSQL that will be converted to SQL
+            if seq_id == 0:
+                print(f"Final NatSQL (after fixes): {pred_natsql}")
+                # Check if NatSQL includes tables mentioned in input (for JOIN detection)
+                # Extract table names from input sequence (format: "table_name : ...")
+                input_tables = []
+                if db_id in table_dict:
+                    input_tables = [t.lower() for t in table_dict[db_id].get("table_names_original", [])]
+                
+                # Find which tables appear in the NatSQL
+                tables_in_natsql = []
+                pred_natsql_lower = pred_natsql.lower()
+                for table in input_tables:
+                    # Check if table name appears in NatSQL (as "table." or "table " or standalone)
+                    if f"{table}." in pred_natsql_lower or f" {table} " in pred_natsql_lower or pred_natsql_lower.startswith(f"{table} "):
+                        tables_in_natsql.append(table)
+                
+                print(f"Tables detected in NatSQL: {tables_in_natsql}")
+                
+                # Check if FK relationships exist in input but not all related tables are in NatSQL
+                input_lower = batch_inputs[batch_id].lower()
+                # Look for FK patterns like "table1.col = table2.col"
+                fk_pattern = r'(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)'
+                fk_matches = re.findall(fk_pattern, input_lower)
+                if fk_matches:
+                    fk_tables = set()
+                    for match in fk_matches:
+                        fk_tables.add(match[0])  # source table
+                        fk_tables.add(match[2])  # target table
+                    missing_tables = fk_tables - set(tables_in_natsql)
+                    if missing_tables:
+                        print(f"⚠️  WARNING: FK relationship exists in input ({fk_tables}) but some tables missing in NatSQL ({missing_tables}) - JOIN may be missing!")
+                print("-"*80)
+            
             # Check if db_id exists in table_dict
             if db_id not in table_dict:
                 raise KeyError(f"Database '{db_id}' not found in NatSQL tables dictionary. Available databases: {list(table_dict.keys())[:10]}...")
             pred_sql = natsql_to_sql(pred_natsql, db_id, db_file_path, table_dict[db_id]).strip()
+            
+            # DEBUG: Log the final SQL
+            if seq_id == 0:
+                print(f"Generated SQL: {pred_sql}")
+                print("="*80 + "\n")
             
             # try to execute the predicted sql
             try:
